@@ -339,7 +339,7 @@ function App() {
         }
 
         setAvatarLoading(true);
-        appendLog("Initializing avatar connection...");
+        appendLog(`Initializing avatar connection... (ICE servers: ${avatarIceServers.length})`);
 
         try {
             const pc = new RTCPeerConnection({
@@ -347,6 +347,16 @@ function App() {
                 iceServers: avatarIceServers,
             });
             pcRef.current = pc;
+
+            pc.oniceconnectionstatechange = () => {
+                appendLog(`ICE connection state: ${pc.iceConnectionState}`);
+            };
+            pc.onconnectionstatechange = () => {
+                appendLog(`Peer connection state: ${pc.connectionState}`);
+            };
+            pc.onicecandidateerror = (event: any) => {
+                appendLog(`ICE candidate error: ${event.errorCode} ${event.errorText || ""} ${event.url || ""}`);
+            };
 
             pc.addTransceiver("audio", { direction: "recvonly" });
             pc.addTransceiver("video", { direction: "recvonly" });
