@@ -11,7 +11,6 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import os
-import requests
 from pathlib import Path
 from dotenv import load_dotenv
 
@@ -47,41 +46,10 @@ session_manager = SessionManager()
 load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
-async def warmup_ecom_api():
-    """Warm up the ecom API by calling the /openapi endpoint"""
-    ecom_api_url = os.getenv("ecom_api_url")
-    if not ecom_api_url:
-        logger.warning("ecom_api_url not configured, skipping API warmup")
-        return
-    
-    warmup_url = f"{ecom_api_url.rstrip('/')}/openapi"
-    
-    try:
-        logger.info("Warming up ecom API at %s", warmup_url)
-        
-        # Run the blocking requests call in a thread to avoid blocking the event loop
-        loop = asyncio.get_event_loop()
-        response = await loop.run_in_executor(
-            None, 
-            lambda: requests.get(warmup_url, timeout=30)
-        )
-        
-        if response.status_code == 200:
-            logger.info("Successfully warmed up ecom API - Status: %d", response.status_code)
-        else:
-            logger.warning("Ecom API warmup returned status %d", response.status_code)
-            
-    except requests.exceptions.RequestException as e:
-        logger.warning("Failed to warm up ecom API: %s", str(e))
-    except Exception as e:
-        logger.error("Unexpected error during ecom API warmup: %s", str(e))
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pylint: disable=unused-argument
     try:
-        # Startup: warm up the ecom API
-        await warmup_ecom_api()
+        logger.info("Aria Investment Advisor starting up...")
         yield
     finally:
         # ensure all sessions are cleaned up
@@ -89,7 +57,7 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:  # pylint: disab
         await asyncio.gather(*[session_manager.remove_session(session_id) for session_id in remaining])
 
 
-app = FastAPI(title="Azure Voice Live Avatar Backend", lifespan=lifespan)
+app = FastAPI(title="Aria Investment Advisor", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -203,9 +171,6 @@ async def serve_spa(full_path: str):
     if static_dir.exists() and not full_path.startswith(("sessions", "ws", "health", "static")):
         index_file = static_dir / "index.html"
         if index_file.exists():
-            # Warm up the ecom API when serving the main page to prevent cold start delays
-            if full_path == "" or full_path == "index.html":
-                asyncio.create_task(warmup_ecom_api())
             return FileResponse(index_file)
     
     # Fallback 404 for missing routes

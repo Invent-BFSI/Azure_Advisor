@@ -76,7 +76,7 @@ function useLog(): [LogEntry[], (message: string) => void] {
 function App() {
     // Set the document title when the component mounts
     useEffect(() => {
-        document.title = "Contoso Retail - Azure Voice Live Avatar Agent";
+        document.title = "Aria - AI Investment Advisor";
     }, []);
 
     const [sessionId, setSessionId] = useState<string | null>(null);
@@ -480,8 +480,8 @@ function App() {
 
     return (
         <main>
-            <h1>Contoso Retail - Azure Voice Live Avatar Agent</h1>
-            <p>Stream audio to Azure Voice Live, receive tool-calling responses, and render avatar video.</p>
+            <h1>Aria - AI Investment Advisor</h1>
+            <p>Your personalized investment profile assistant powered by Azure Voice Live Avatar.</p>
 
             <section className="section">
                 <h2>Controls</h2>
