@@ -508,9 +508,11 @@ class VoiceLiveSession:
             "client_sdp": encoded_sdp,
             "rtc_configuration": {"bundle_policy": "max-bundle"},
         }
+        logger.info("[%s] Sending session.avatar.connect ...", self.session_id)
         await self._send("session.avatar.connect", payload)
         try:
-            server_sdp = await asyncio.wait_for(future, timeout=20)
+            server_sdp = await asyncio.wait_for(future, timeout=30)
+            logger.info("[%s] Avatar SDP received successfully", self.session_id)
             return server_sdp
         finally:
             self._avatar_future = None
@@ -527,7 +529,9 @@ class VoiceLiveSession:
                     logger.warning("[%s] Failed to decode message", self.session_id)
                     continue
                 event_type = event.get("type")
+                logger.debug("[%s] Received event: %s", self.session_id, event_type)
                 if event_type == "error":
+                    logger.error("[%s] Error event: %s", self.session_id, event.get("error", event))
                     await self._broadcast({"type": "error", "payload": event})
                 elif event_type == "response.audio.delta":
                     await self._broadcast({"type": "assistant_audio_delta", "delta": event.get("delta")})
