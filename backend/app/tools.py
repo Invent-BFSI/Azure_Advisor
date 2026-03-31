@@ -9,48 +9,13 @@ from typing import Any, Callable, Dict
 
 logger = logging.getLogger(__name__)
 
-CSV_FILE = "customer_details.csv"
+CSV_FILE = "customerDetail.csv"
 
 CSV_COLUMNS = [
-    "session_id",
     "timestamp",
-    # Phase 0 — Identity
     "full_name",
-    "age",
-    "region_stated",
-    "canonical_country",
-    "currency_code",
-    "currency_symbol",
-    # Phase 1 — Knowledge
-    "knowledge_level",
-    # Phase 2 — Life Situation
-    "has_dependents",
-    "has_life_insurance",
-    # Phase 3 — Financial Foundations
-    "high_interest_debt",
-    "debt_balance",
-    "debt_rate_pct",
-    "has_emergency_fund",
-    "emergency_fund_months",
-    # Phase 4 — Income & Budget
-    "monthly_inflow",
-    "monthly_outflow",
-    "monthly_surplus",
-    "investment_amount",
-    # Phase 5 — Goals
-    "investment_goals",
-    "investment_period_years",
-    # Phase 6 — Risk
-    "risk_tolerance_emotional",
-    "risk_capacity_financial",
-    "risk_appetite",
-    # Phase 7 — Preferences
-    "asset_interests",
-    "avoid_asset_classes",
-    "involvement_level",
-    # Summary
-    "flags",
     "profile_summary",
+    "portfolio",
 ]
 
 _SAVE_PROFILE_SCHEMA = {
@@ -88,7 +53,7 @@ _SAVE_PROFILE_SCHEMA = {
         },
         "risk_appetite": {
             "type": "string",
-            "enum": ["conservative", "moderate", "aggressive"],
+            "enum": ["conservative", "conservative-moderate", "moderate", "moderate-aggressive", "aggressive"],
         },
         "asset_interests": {"type": "array", "items": {"type": "string"}},
         "avoid_asset_classes": {"type": "array", "items": {"type": "string"}},
@@ -117,80 +82,60 @@ _SAVE_PROFILE_SCHEMA = {
     ],
 }
 
-
-def _build_flags(profile: dict) -> list:
-    flags = []
-
-    if profile.get("high_interest_debt"):
-        rate = profile.get("debt_rate_pct", 0)
-        balance = profile.get("debt_balance", 0)
-        sym = profile.get("currency_symbol", "$")
-        rate_str = f" at ~{rate:.0f}%" if rate else ""
-        bal_str = f" ({sym}{balance:,.0f})" if balance else ""
-        flags.append(f"HIGH_INTEREST_DEBT{bal_str}{rate_str}")
-
-    has_ef = profile.get("has_emergency_fund", False)
-    ef_months = float(profile.get("emergency_fund_months", 0))
-    if not has_ef:
-        flags.append("NO_EMERGENCY_FUND")
-    elif ef_months < 3:
-        flags.append(f"LOW_EMERGENCY_FUND ({ef_months:.0f} months)")
-
-    if profile.get("has_dependents") and not profile.get("has_life_insurance"):
-        flags.append("NO_LIFE_INSURANCE + DEPENDENTS")
-
-    return flags
+_SAVE_PORTFOLIO_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "full_name": {
+            "type": "string",
+            "description": "The user's full name (must match the name saved in profile).",
+        },
+        "portfolio": {
+            "type": "string",
+            "description": (
+                "The complete portfolio recommendation in markdown format, including: "
+                "executive summary, asset allocation with specific percentages, "
+                "detailed investment options per asset class, investment reasoning, "
+                "and key considerations. This is the final agreed-upon portfolio after negotiation."
+            ),
+        },
+    },
+    "required": ["full_name", "portfolio"],
+}
 
 
-def _save_to_csv(session_id: str, profile: dict) -> None:
-    flags = _build_flags(profile)
-    inflow = float(profile.get("monthly_inflow", 0))
-    outflow = float(profile.get("monthly_outflow", 0))
+# ── In-memory store for profile data awaiting portfolio ────────
+# Maps full_name (lowered) -> row dict so savePortfolio can find it
+_pending_profiles: Dict[str, dict] = {}
 
-    row = {
-        "session_id": session_id,
-        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "full_name": profile.get("full_name", ""),
-        "age": profile.get("age", ""),
-        "region_stated": profile.get("region_stated", ""),
-        "canonical_country": profile.get("canonical_country", ""),
-        "currency_code": profile.get("currency_code", ""),
-        "currency_symbol": profile.get("currency_symbol", ""),
-        "knowledge_level": profile.get("knowledge_level", ""),
-        "has_dependents": profile.get("has_dependents", False),
-        "has_life_insurance": profile.get("has_life_insurance", False),
-        "high_interest_debt": profile.get("high_interest_debt", False),
-        "debt_balance": profile.get("debt_balance", 0),
-        "debt_rate_pct": profile.get("debt_rate_pct", 0),
-        "has_emergency_fund": profile.get("has_emergency_fund", False),
-        "emergency_fund_months": profile.get("emergency_fund_months", 0),
-        "monthly_inflow": inflow,
-        "monthly_outflow": outflow,
-        "monthly_surplus": round(inflow - outflow, 2),
-        "investment_amount": profile.get("investment_amount", 0),
-        "investment_goals": "; ".join(profile.get("investment_goals", [])),
-        "investment_period_years": profile.get("investment_period_years", ""),
-        "risk_tolerance_emotional": profile.get("risk_tolerance_emotional", ""),
-        "risk_capacity_financial": profile.get("risk_capacity_financial", ""),
-        "risk_appetite": profile.get("risk_appetite", ""),
-        "asset_interests": "; ".join(profile.get("asset_interests", [])),
-        "avoid_asset_classes": "; ".join(profile.get("avoid_asset_classes", [])),
-        "involvement_level": profile.get("involvement_level", ""),
-        "flags": " | ".join(flags) if flags else "",
-        "profile_summary": profile.get("profile_summary", ""),
-    }
 
+def _name_exists_in_csv(full_name: str) -> bool:
+    """Check if a name already exists in the CSV file (case-insensitive)."""
+    if not os.path.isfile(CSV_FILE):
+        return False
+    try:
+        with open(CSV_FILE, "r", newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            target = full_name.lower().strip()
+            for row in reader:
+                if row.get("full_name", "").lower().strip() == target:
+                    return True
+    except Exception:
+        pass
+    return False
+
+
+def _write_csv_row(row: dict) -> None:
+    """Append a single row to the CSV file."""
     file_exists = os.path.isfile(CSV_FILE)
     with open(CSV_FILE, "a", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
         if not file_exists:
             writer.writeheader()
         writer.writerow(row)
-    logger.info("Profile saved to CSV for session %s", session_id)
 
 
 def save_user_profile(session_id: str = "", **kwargs: Any) -> str:
-    """Save the completed user investment profile to CSV after all 18 questions."""
+    """Save the completed user investment profile. Stores in memory until portfolio is saved."""
     required = [
         "full_name",
         "monthly_inflow",
@@ -207,11 +152,63 @@ def save_user_profile(session_id: str = "", **kwargs: Any) -> str:
         logger.error(err)
         return json.dumps({"error": err})
 
-    _save_to_csv(session_id, kwargs)
-    logger.info("Profile saved successfully for session %s", session_id)
+    full_name = kwargs.get("full_name", "")
+    profile_summary = kwargs.get("profile_summary", "")
+
+    if _name_exists_in_csv(full_name):
+        logger.info("Profile already exists for %s — skipping save.", full_name)
+        return json.dumps({
+            "status": "exists",
+            "message": f"A profile for {full_name} already exists. Would you like to update it or continue with the existing profile?",
+            "profile_summary": profile_summary,
+        })
+
+    # Store pending row — will be written to CSV when portfolio arrives
+    _pending_profiles[full_name.lower().strip()] = {
+        "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "full_name": full_name,
+        "profile_summary": profile_summary,
+        "portfolio": "",
+    }
+
+    logger.info("Profile saved in memory for %s (session %s), awaiting portfolio.", full_name, session_id)
     return json.dumps({
         "status": "saved",
-        "profile_summary": kwargs.get("profile_summary", ""),
+        "profile_summary": profile_summary,
+    })
+
+
+def save_portfolio(session_id: str = "", **kwargs: Any) -> str:
+    """Save the final agreed portfolio recommendation and write the complete row to CSV."""
+    full_name = kwargs.get("full_name", "")
+    portfolio = kwargs.get("portfolio", "")
+
+    if not full_name or not portfolio:
+        err = "Missing required fields: full_name and portfolio are required."
+        logger.error(err)
+        return json.dumps({"error": err})
+
+    key = full_name.lower().strip()
+    pending = _pending_profiles.pop(key, None)
+
+    if pending:
+        pending["portfolio"] = portfolio
+        _write_csv_row(pending)
+        logger.info("Complete profile + portfolio saved to CSV for %s", full_name)
+    else:
+        # No pending profile — write what we have
+        row = {
+            "timestamp": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "full_name": full_name,
+            "profile_summary": "",
+            "portfolio": portfolio,
+        }
+        _write_csv_row(row)
+        logger.info("Portfolio saved to CSV for %s (no pending profile found)", full_name)
+
+    return json.dumps({
+        "status": "saved",
+        "message": f"Portfolio recommendation saved for {full_name}.",
     })
 
 
@@ -229,8 +226,22 @@ TOOLS_LIST = [
         ),
         "parameters": _SAVE_PROFILE_SCHEMA,
     },
+    {
+        "type": "function",
+        "name": "savePortfolio",
+        "description": (
+            "Saves the final agreed-upon portfolio recommendation AFTER the user has confirmed "
+            "they are happy with the allocation in Phase 9. The portfolio field must contain "
+            "the COMPLETE portfolio recommendation in markdown format including: executive summary, "
+            "asset allocation percentages, specific investment options for each asset class, "
+            "investment reasoning, and key considerations. Call this ONCE at the end of Phase 10 "
+            "after presenting all starter recommendations and practical next steps."
+        ),
+        "parameters": _SAVE_PORTFOLIO_SCHEMA,
+    },
 ]
 
 AVAILABLE_FUNCTIONS: Dict[str, Callable[..., Any]] = {
     "saveUserProfile": save_user_profile,
+    "savePortfolio": save_portfolio,
 }
